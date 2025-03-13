@@ -33,7 +33,7 @@ struct Platform {
     ieee802154_driver: &'static nrf52840dk_lib::Ieee802154Driver,
     udp_driver: &'static capsules_extra::net::udp::UDPDriver<'static>,
     screen: &'static ScreenDriver, // add screen driver
-    ipc: kernel::ipc::IPC<{ NUM_PROCS as u8 }>,
+                                   // ipc: kernel::ipc::IPC<{ NUM_PROCS as u8 }>,
 }
 
 impl SyscallDriverLookup for Platform {
@@ -46,7 +46,7 @@ impl SyscallDriverLookup for Platform {
             capsules_extra::net::udp::DRIVER_NUM => f(Some(self.udp_driver)),
             capsules_extra::ieee802154::DRIVER_NUM => f(Some(self.ieee802154_driver)),
             capsules_extra::screen::DRIVER_NUM => f(Some(self.screen)),
-            kernel::ipc::DRIVER_NUM => f(Some(&self.ipc)),
+            // kernel::ipc::DRIVER_NUM => f(Some(&self.ipc)),
             _ => self.base.with_driver(driver_num, f),
         }
     }
@@ -161,11 +161,11 @@ pub unsafe fn main() {
     )
     .finalize(components::screen_component_static!(1032));
 
-    let ipc = kernel::ipc::IPC::new(
-    board_kernel,
-    kernel::ipc::DRIVER_NUM,
-    &memory_allocation_capability);
-
+    // let ipc = kernel::ipc::IPC::new(
+    //     board_kernel,
+    //     kernel::ipc::DRIVER_NUM,
+    //     &memory_allocation_capability,
+    // );
 
     ssd1306_sh1106.init_screen();
 
@@ -209,7 +209,7 @@ pub unsafe fn main() {
         ieee802154_driver,
         udp_driver,
         screen,
-        ipc,
+        // ipc,
     };
 
     let main_loop_capability = create_capability!(capabilities::MainLoopCapability);

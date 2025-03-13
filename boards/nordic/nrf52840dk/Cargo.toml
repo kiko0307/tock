@@ -38,3 +38,7 @@ tock_build_scripts = { path = "../../build_scripts" }
 
 [lints]
 workspace = true
+
+
+[permissions]
+allow = ["ipc"]
