@@ -46,7 +46,6 @@ impl SyscallDriverLookup for Platform {
             capsules_extra::net::udp::DRIVER_NUM => f(Some(self.udp_driver)),
             capsules_extra::ieee802154::DRIVER_NUM => f(Some(self.ieee802154_driver)),
             capsules_extra::screen::DRIVER_NUM => f(Some(self.screen)),
-            // kernel::ipc::DRIVER_NUM => f(Some(&self.ipc)),
             _ => self.base.with_driver(driver_num, f),
         }
     }
