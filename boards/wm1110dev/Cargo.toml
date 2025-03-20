@@ -26,3 +26,9 @@ tock_build_scripts = { path = "../build_scripts" }
 
 [lints]
 workspace = true
+
+
+[features]
+default = ["screen_ssd1306"]
+screen_ssd1306 = []
+screen_sh1106 = []

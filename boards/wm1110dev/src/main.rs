@@ -101,6 +101,8 @@ type RngDriver = components::rng::RngComponentType<nrf52840::trng::Trng<'static>
 
 type NonvolatileDriver = components::nonvolatile_storage::NonvolatileStorageComponentType;
 
+type ScreenDriver = components::screen::ScreenComponentType;
+
 /// Supported drivers by the platform
 pub struct Platform {
     console: &'static capsules_core::console::Console<'static>,
@@ -132,6 +134,8 @@ pub struct Platform {
     >,
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm4::systick::SysTick,
+    screen: &'static ScreenDriver, //add screen driver
+    adc: &'static capsules_core::adc::AdcDedicated<'static, nrf52840::adc::Adc<'static>>,
 }
 
 impl SyscallDriverLookup for Platform {
@@ -139,6 +143,7 @@ impl SyscallDriverLookup for Platform {
     where
         F: FnOnce(Option<&dyn kernel::syscall::SyscallDriver>) -> R,
     {
+        debug!("with_driver() called with driver_num: {}", driver_num);
         match driver_num {
             capsules_core::console::DRIVER_NUM => f(Some(self.console)),
             capsules_core::gpio::DRIVER_NUM => f(Some(self.gpio)),
@@ -150,7 +155,12 @@ impl SyscallDriverLookup for Platform {
             }
             LORA_SPI_DRIVER_NUM => f(Some(self.lr1110_spi)),
             LORA_GPIO_DRIVER_NUM => f(Some(self.lr1110_gpio)),
-            kernel::ipc::DRIVER_NUM => f(Some(&self.ipc)),
+            kernel::ipc::DRIVER_NUM => {
+                debug!("IPC driver matched and returned");
+                f(Some(&self.ipc))
+            }
+            capsules_extra::screen::DRIVER_NUM => f(Some(self.screen)),
+            capsules_core::adc::DRIVER_NUM => f(Some(self.adc)),
             capsules_extra::temperature::DRIVER_NUM => f(Some(self.temperature)),
             capsules_extra::humidity::DRIVER_NUM => f(Some(self.humidity)),
             _ => f(None),
@@ -411,6 +421,80 @@ pub unsafe fn start() -> (
     .finalize(components::gpio_component_static!(nrf52840::gpio::GPIOPin));
 
     //--------------------------------------------------------------------------
+    // Screen Initiallization
+    //--------------------------------------------------------------------------
+
+    const SCREEN_I2C_SDA_PIN: Pin = Pin::P1_02;
+    const SCREEN_I2C_SCL_PIN: Pin = Pin::P1_01;
+
+    let i2c_bus = components::i2c::I2CMuxComponent::new(&nrf52840_peripherals.nrf52.twi1, None)
+        .finalize(components::i2c_mux_component_static!(nrf52840::i2c::TWI));
+    nrf52840_peripherals.nrf52.twi1.configure(
+        nrf52840::pinmux::Pinmux::new(SCREEN_I2C_SCL_PIN as u32),
+        nrf52840::pinmux::Pinmux::new(SCREEN_I2C_SDA_PIN as u32),
+    );
+    nrf52840_peripherals
+        .nrf52
+        .twi1
+        .set_speed(nrf52840::i2c::Speed::K400);
+
+    // I2C address is b011110X, and on this board D/C̅ is GND.
+    let ssd1306_sh1106_i2c = components::i2c::I2CComponent::new(i2c_bus, 0x3c)
+        .finalize(components::i2c_component_static!(nrf52840::i2c::TWI));
+
+    // Create the ssd1306 object for the actual screen driver.
+    #[cfg(feature = "screen_ssd1306")]
+    let ssd1306_sh1106 = components::ssd1306::Ssd1306Component::new(ssd1306_sh1106_i2c, true)
+        .finalize(components::ssd1306_component_static!(nrf52840::i2c::TWI));
+
+    #[cfg(feature = "screen_sh1106")]
+    let ssd1306_sh1106 = components::sh1106::Sh1106Component::new(ssd1306_sh1106_i2c, true)
+        .finalize(components::sh1106_component_static!(nrf52840::i2c::TWI));
+
+    let screen = components::screen::ScreenComponent::new(
+        board_kernel,
+        capsules_extra::screen::DRIVER_NUM,
+        ssd1306_sh1106,
+        None,
+    )
+    .finalize(components::screen_component_static!(1032));
+
+    let ipc = kernel::ipc::IPC::<{ NUM_PROCS as u8 }>::new(
+        board_kernel,
+        kernel::ipc::DRIVER_NUM,
+        &memory_allocation_capability,
+    );
+
+    debug!("IPC initialized at address: {:p}", &ipc);
+
+    ssd1306_sh1106.init_screen();
+
+    //--------------------------------------------------------------------------
+    // ADC
+    //--------------------------------------------------------------------------
+
+    let adc_channels = static_init!(
+        [nrf52840::adc::AdcChannelSetup; 6],
+        [
+            nrf52840::adc::AdcChannelSetup::new(nrf52840::adc::AdcChannel::AnalogInput1),
+            nrf52840::adc::AdcChannelSetup::new(nrf52840::adc::AdcChannel::AnalogInput2),
+            nrf52840::adc::AdcChannelSetup::new(nrf52840::adc::AdcChannel::AnalogInput4),
+            nrf52840::adc::AdcChannelSetup::new(nrf52840::adc::AdcChannel::AnalogInput5),
+            nrf52840::adc::AdcChannelSetup::new(nrf52840::adc::AdcChannel::AnalogInput6),
+            nrf52840::adc::AdcChannelSetup::new(nrf52840::adc::AdcChannel::AnalogInput7),
+        ]
+    );
+    let adc = components::adc::AdcDedicatedComponent::new(
+        &base_peripherals.adc,
+        adc_channels,
+        board_kernel,
+        capsules_core::adc::DRIVER_NUM,
+    )
+    .finalize(components::adc_dedicated_component_static!(
+        nrf52840::adc::Adc
+    ));
+
+    //--------------------------------------------------------------------------
     // Process Console
     //--------------------------------------------------------------------------
 
@@ -475,18 +559,23 @@ pub unsafe fn start() -> (
         rng,
         alarm,
         nonvolatile_storage,
-        ipc: kernel::ipc::IPC::new(
-            board_kernel,
-            kernel::ipc::DRIVER_NUM,
-            &memory_allocation_capability,
-        ),
+        // ipc: kernel::ipc::IPC::new(
+        //     board_kernel,
+        //     kernel::ipc::DRIVER_NUM,
+        //     &memory_allocation_capability,
+        // ),
+        ipc,
         scheduler,
         systick: cortexm4::systick::SysTick::new_with_calibration(64000000),
         temperature,
         humidity,
         lr1110_spi,
         lr1110_gpio,
+        screen,
+        adc,
     };
+
+    base_peripherals.adc.calibrate();
 
     let chip = static_init!(
         nrf52840::chip::NRF52<Nrf52840DefaultPeripherals>,
